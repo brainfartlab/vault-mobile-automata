@@ -3,7 +3,7 @@ mod utils;
 extern crate bitvec;
 
 use bitvec::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -35,6 +35,10 @@ impl Universe {
 
     pub fn as_ptr(&self) -> *const usize {
         self.cells.as_bitptr().pointer()
+    }
+
+    fn as_slice(&self) -> &BitSlice {
+        self.cells.as_bitslice()
     }
 
     pub fn count_alive(&self) -> usize {
@@ -169,7 +173,9 @@ impl MobileRule {
 impl Rule<MobileState> for MobileRule {
     fn apply(&self, state: &mut MobileState, universe: &mut Universe) {
         let a = universe.span() - self.span;
-        let mut new_positions: HashSet<usize> = HashSet::new();
+
+        let mut new_values: HashMap<usize, bool> = HashMap::with_capacity(state.positions.len());
+        let mut new_states: HashSet<usize> = HashSet::new();
 
         // iterate over all states
         for i in state.positions.iter() {
@@ -177,14 +183,9 @@ impl Rule<MobileState> for MobileRule {
             let combination: usize = (a..=a+2*self.span)
                 .map(|j| {
                     let index = (i + j) % universe.span();
-                    universe.cells[index]
+                    if universe.as_slice()[index] { 1 } else { 0 }
                 })
-                .rev()
-                .enumerate()
-                .map(|(i, val)| {
-                    (val as usize) << i
-                })
-                .sum();
+                .fold(0, |sum, value| 2*sum + value);
 
             let outcome = &self.cases[combination];
 
@@ -214,8 +215,8 @@ impl Rule<MobileState> for MobileRule {
                     },
                 }
             } else {
-                // simple or generalized
-                universe.cells.splice(i..=i, progeny.iter().by_vals());
+                // simple or generalized: use a hashmap to prevent overwites for generalized
+                new_values.insert(*i, progeny[0]);
             }
 
             // positions
@@ -227,10 +228,14 @@ impl Rule<MobileState> for MobileRule {
                 })
                 .collect();
 
-            new_positions.extend(&next_positions);
+            new_states.extend(&next_positions);
         }
 
-        state.update_positions(new_positions);
+        // only for simple and generalized
+        for (&index, &value) in new_values.iter() {
+            universe.cells.set(index, value);
+        }
+        state.update_positions(new_states);
     }
 }
 
@@ -261,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn mobile_rule_simple_apply() {
+    fn mobile_rule_simple1_apply() {
         let mut universe = Universe::new(11);
 
         let mut state = MobileState::new(universe.span());
@@ -293,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn mobile_rule_simple_apply2() {
+    fn mobile_rule_simple2_apply() {
         let mut universe = Universe::new(11);
 
         let mut state = MobileState::new(universe.span());
@@ -333,5 +338,60 @@ mod tests {
             0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0
         ]);
         assert!(state.contains(5));
+    }
+
+    #[test]
+    fn mobile_rule_generalized1_apply() {
+        let mut universe = Universe::new(11);
+
+        let mut state = MobileState::new(universe.span());
+        state.add_position(5);
+
+        let mut rule: MobileRule = MobileRule::new(1);
+        rule.set_outcome(0, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([-1, 1])));
+        rule.set_outcome(1, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([-1])));
+        rule.set_outcome(2, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([-1, 1])));
+        rule.set_outcome(3, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([-1])));
+        rule.set_outcome(4, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([0, 1])));
+        rule.set_outcome(5, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([1])));
+        rule.set_outcome(6, Outcome::from_bitvec(1, BitVec::repeat(false, 1), Vec::from([1])));
+        rule.set_outcome(7, Outcome::from_bitvec(1, BitVec::repeat(false, 1), Vec::from([1])));
+
+
+        // iteration 1
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0
+        ]);
+        assert!(state.contains(4));
+        assert!(state.contains(6));
+
+        // iteration 2
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0
+        ]);
+        assert!(state.contains(3));
+        assert!(state.contains(6));
+        assert!(state.contains(7));
+
+        // iteration 3
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0
+        ]);
+        assert!(state.contains(2));
+        assert!(state.contains(7));
+        assert!(state.contains(8));
+
+        // iteration 4
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0
+        ]);
+        assert!(state.contains(1));
+        assert!(state.contains(6));
+        assert!(state.contains(8));
+        assert!(state.contains(9));
     }
 }
