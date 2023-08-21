@@ -1,13 +1,18 @@
 module Rule exposing
     ( Rule, RuleType(..)
     , Error(..)
-    , Case, Combination, Progeny, Mobility
+    , Case, Combination, Outcome, Progeny, Mobility
     , newRule
     , getSpan, getType, getCase, getCases
-    , updateMobility, updateProgeny, encodeRule
+    , updateMobility, updateProgeny
+    , encodeRule, ruleDecoder
     , getCombination, getProgeny, getMobility
     )
 
+import Debug
+import Json.Decode
+import Json.Decode.Extra
+import Json.Decode.Pipeline exposing (required, resolve)
 import Json.Encode
 import Set exposing (Set)
 
@@ -259,6 +264,14 @@ getType (Rule ruleType _ _) =
     ruleType
 
 
+ruleTypeToString : RuleType -> String
+ruleTypeToString ruleType =
+    case ruleType of
+        Simple -> "simple"
+        Extended -> "extended"
+        Generalized -> "generalized"
+
+
 getSpan : Rule a -> Span
 getSpan (Rule _ span _) =
     span
@@ -281,8 +294,12 @@ getCase combination (Rule _ span cases) =
 
 
 encodeRule : (a -> Json.Encode.Value) -> Rule a -> Json.Encode.Value
-encodeRule valueEncoder (Rule _ _ cases) =
-    Json.Encode.list (encodeCase valueEncoder) cases
+encodeRule valueEncoder rule =
+    Json.Encode.object
+        [ ("rule-type", Json.Encode.string <| ruleTypeToString <| getType rule)
+        , ("span", Json.Encode.int <| getSpan rule)
+        , ("cases", Json.Encode.list (encodeCase valueEncoder) <| getCases rule)
+        ]
 
 
 encodeCase : (a -> Json.Encode.Value) -> Case a -> Json.Encode.Value
@@ -299,3 +316,71 @@ encodeOutcome valueEncoder { progeny, mobility } =
         [ ("progeny", (encodeFragment valueEncoder) progeny)
         , ("mobility", Json.Encode.set Json.Encode.int mobility)
         ]
+
+
+fragmentDecoder : List a -> Json.Decode.Decoder (Fragment a)
+fragmentDecoder cells =
+    let
+        test = Debug.log "fragment" cells
+    in
+    case Fragment.fromList cells of
+        Ok fragment ->
+            Json.Decode.succeed fragment
+
+        Err _ ->
+            Json.Decode.fail ("Improper fragment: " ++ (String.fromInt (List.length cells)))
+
+
+outcomeDecoder : Json.Decode.Decoder (List a) -> Json.Decode.Decoder (Outcome a)
+outcomeDecoder symbolDecoder =
+    Json.Decode.succeed Outcome
+        |> required "progeny" (Json.Decode.andThen fragmentDecoder symbolDecoder)
+        |> required "mobility" (Json.Decode.Extra.set Json.Decode.int)
+
+
+caseDecoder : Json.Decode.Decoder (List a) -> Json.Decode.Decoder (Case a)
+caseDecoder symbolDecoder =
+    let
+        toCaseDecoder : Combination a -> Outcome a -> Json.Decode.Decoder (Case a)
+        toCaseDecoder combination outcome =
+            Json.Decode.succeed <|
+                Case
+                    { combination = combination
+                    , outcome = outcome
+                    }
+    in
+    Json.Decode.succeed toCaseDecoder
+        |> required "combination" (Json.Decode.andThen fragmentDecoder symbolDecoder)
+        |> required "outcome" (outcomeDecoder symbolDecoder)
+        |> resolve
+
+
+ruleTypeDecoder : String -> Json.Decode.Decoder RuleType
+ruleTypeDecoder ruleType =
+    case ruleType of
+        "simple" ->
+            Json.Decode.succeed Simple
+
+        "extended" ->
+            Json.Decode.succeed Extended
+
+        "generalized" ->
+            Json.Decode.succeed Generalized
+
+        _ ->
+            Json.Decode.fail ("Unrecognized rule type: " ++ ruleType)
+
+
+ruleDecoder : Json.Decode.Decoder (List a) -> Json.Decode.Decoder (Rule a)
+ruleDecoder symbolDecoder =
+    let
+        toRuleDecoder : RuleType -> Span -> List (Case a) -> Json.Decode.Decoder (Rule a)
+        toRuleDecoder ruleType span cases =
+            Json.Decode.succeed <|
+                Rule ruleType span cases
+    in
+    Json.Decode.succeed toRuleDecoder
+        |> required "rule-type" (Json.Decode.andThen ruleTypeDecoder Json.Decode.string)
+        |> required "span" Json.Decode.int
+        |> required "cases" (Json.Decode.list <| caseDecoder symbolDecoder)
+        |> resolve

@@ -1,9 +1,10 @@
-module RuleTests exposing (newRuleTests, updateProgenyTests, updateMobilityTests, encodeRuleTests)
+module RuleTests exposing (newRuleTests, updateProgenyTests, updateMobilityTests, encodeRuleTests, decodeRuleTests)
 
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
 import Test exposing (..)
 
+import Json.Decode
 import Json.Encode
 import Set exposing (Set)
 
@@ -171,126 +172,210 @@ encodeRuleTests =
         ]
 
 
+testDecoder : Int -> Json.Decode.Decoder Cell
+testDecoder index =
+    case index of
+        0 -> Json.Decode.succeed Dead
+        1 -> Json.Decode.succeed Live
+        _ -> Json.Decode.fail "Invalid cell"
+
+
+symbolDecoder : Json.Decode.Decoder (List Cell)
+symbolDecoder =
+    Json.Decode.list <| Json.Decode.andThen testDecoder Json.Decode.int
+
+
+decodeRuleTests : Test
+decodeRuleTests =
+    describe "decodeRule"
+        [ test "simple rule" <|
+            \_ ->
+                Json.Decode.decodeString (ruleDecoder symbolDecoder) testEncodedRule
+                    |> Expect.all
+                        [ (\ruleResult ->
+                            inspectType ruleResult |> Expect.equal (Ok Simple)
+                          )
+                        , (\ruleResult ->
+                            inspectSpan ruleResult |> Expect.equal (Ok 1)
+                          )
+                        ]
+        ]
+
+
+inspectType : Result err (Rule Cell) -> Result err RuleType
+inspectType ruleResult =
+    case ruleResult of
+        Ok rule ->
+            Ok (getType rule)
+
+        Err err ->
+            Err err
+
+
+inspectSpan : Result err (Rule Cell) -> Result err Fragment.Span
+inspectSpan ruleResult =
+    case ruleResult of
+        Ok rule ->
+            Ok (getSpan rule)
+
+        Err err ->
+            Err err
+
+
+inspectCases : Result err (Rule Cell) -> Result err (List (Case Cell))
+inspectCases ruleResult =
+    case ruleResult of
+        Ok rule ->
+            Ok (getCases rule |> List.sortBy caseToInt)
+
+        Err err ->
+            Err err
+
+
+cellToInt : Cell -> Int
+cellToInt cell =
+    case cell of
+        Dead -> 0
+        Live -> 1
+
+
+caseToInt: Case Cell -> Int
+caseToInt ruleCase =
+    let
+        combination : Combination Cell
+        combination =
+            getCombination ruleCase
+    in
+    combination
+        |> Fragment.toList
+        |> List.map cellToInt
+        |> List.foldl (\i v -> i + 2*v) 0
+
+
 testEncodedRule : String
-testEncodedRule = """[
-    {
-        "outcome": {
-            "progeny": [
+testEncodedRule = """{
+    "rule-type": "simple",
+    "span": 1,
+    "cases": [
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                1,
+                1,
                 1
-            ],
-            "mobility": [
-                -1
             ]
         },
-        "combination": [
-            1,
-            1,
-            1
-        ]
-    },
-    {
-        "outcome": {
-            "progeny": [
-                1
-            ],
-            "mobility": [
-                -1
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                1,
+                1,
+                0
             ]
         },
-        "combination": [
-            1,
-            1,
-            0
-        ]
-    },
-    {
-        "outcome": {
-            "progeny": [
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                1,
+                0,
                 1
-            ],
-            "mobility": [
-                -1
             ]
         },
-        "combination": [
-            1,
-            0,
-            1
-        ]
-    },
-    {
-        "outcome": {
-            "progeny": [
-                1
-            ],
-            "mobility": [
-                -1
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                1,
+                0,
+                0
             ]
         },
-        "combination": [
-            1,
-            0,
-            0
-        ]
-    },
-    {
-        "outcome": {
-            "progeny": [
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                0,
+                1,
                 1
-            ],
-            "mobility": [
-                -1
             ]
         },
-        "combination": [
-            0,
-            1,
-            1
-        ]
-    },
-    {
-        "outcome": {
-            "progeny": [
-                1
-            ],
-            "mobility": [
-                -1
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                0,
+                1,
+                0
             ]
         },
-        "combination": [
-            0,
-            1,
-            0
-        ]
-    },
-    {
-        "outcome": {
-            "progeny": [
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                0,
+                0,
                 1
-            ],
-            "mobility": [
-                -1
             ]
         },
-        "combination": [
-            0,
-            0,
-            1
-        ]
-    },
-    {
-        "outcome": {
-            "progeny": [
-                1
-            ],
-            "mobility": [
-                -1
+        {
+            "outcome": {
+                "progeny": [
+                    1
+                ],
+                "mobility": [
+                    -1
+                ]
+            },
+            "combination": [
+                0,
+                0,
+                0
             ]
-        },
-        "combination": [
-            0,
-            0,
-            0
-        ]
-    }
-]"""
+        }
+    ]
+}"""

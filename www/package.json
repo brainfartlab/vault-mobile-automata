@@ -32,7 +32,7 @@
   },
   "homepage": "https://github.com/rustwasm/create-wasm-app#readme",
   "dependencies": {
-    "vault-mobile-automata": "file:../pkg"
+    "mobile-automata": "file:../pkg"
   },
   "devDependencies": {
     "chokidar-cli": "^2.1.0",

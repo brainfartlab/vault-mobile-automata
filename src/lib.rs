@@ -29,6 +29,10 @@ impl Universe {
         self.cells.set(index, value);
     }
 
+    pub fn get(&self, index: usize) -> bool {
+        self.cells[index]
+    }
+
     pub fn as_ptr(&self) -> *const usize {
         self.cells.as_bitptr().pointer()
     }
@@ -63,6 +67,10 @@ impl MobileState {
         self.positions.contains(&position)
     }
 
+    pub fn get_positions(&self) -> Vec<usize> {
+        self.positions.iter().map(|i| *i).collect()
+    }
+
     fn update_positions(&mut self, positions: HashSet<usize>) {
         self.positions = positions;
     }
@@ -82,8 +90,8 @@ pub struct Outcome {
 
 #[wasm_bindgen]
 impl Outcome {
-    pub fn new(span: usize, progeny_values: Vec<JsValue>, mobility_values: Vec<i32>) -> Outcome {
-        let mut progeny = BitVec::repeat(false, 2*span + 1);
+    pub fn new(progeny_values: Vec<JsValue>, mobility_values: Vec<i32>) -> Outcome {
+        let mut progeny = BitVec::repeat(false, progeny_values.len());
 
         progeny_values
             .iter()
@@ -95,6 +103,21 @@ impl Outcome {
                 progeny.set(i, b);
             });
 
+        let mut mobility: HashSet<i32> = HashSet::new();
+
+        mobility_values
+            .iter()
+            .for_each(|&i| {
+                mobility.insert(i);
+            });
+
+        Outcome {
+            progeny,
+            mobility,
+        }
+    }
+
+    fn from_bitvec(span: usize, progeny: BitVec, mobility_values: Vec<i32>) -> Outcome {
         let mut mobility: HashSet<i32> = HashSet::new();
 
         mobility_values
@@ -211,6 +234,7 @@ impl Rule<MobileState> for MobileRule {
     }
 }
 
+#[wasm_bindgen]
 pub fn iterate(rule: &MobileRule, universe: &mut Universe, state: &mut MobileState) {
     rule.apply(state, universe);
 }
@@ -234,5 +258,80 @@ mod tests {
     fn mobile_state_add_position() {
         let mut state = MobileState::new(6);
         state.add_position(2);
+    }
+
+    #[test]
+    fn mobile_rule_simple_apply() {
+        let mut universe = Universe::new(11);
+
+        let mut state = MobileState::new(universe.span());
+        state.add_position(0);
+        state.add_position(5);
+        state.add_position(10);
+
+        let mut rule: MobileRule = MobileRule::new(1);
+        (0..8)
+            .map(|_i| {
+                let progeny: BitVec = BitVec::repeat(true, 1);
+                let mobility: Vec<i32> = Vec::from([-1]);
+
+                Outcome::from_bitvec(1, progeny, mobility)
+            })
+            .enumerate()
+            .for_each(|(i, outcome)| {
+                rule.set_outcome(i, outcome);
+            });
+
+
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
+        ]);
+        assert!(state.contains(4));
+        assert!(state.contains(9));
+        assert!(state.contains(10));
+    }
+
+    #[test]
+    fn mobile_rule_simple_apply2() {
+        let mut universe = Universe::new(11);
+
+        let mut state = MobileState::new(universe.span());
+        state.add_position(5);
+
+        let mut rule: MobileRule = MobileRule::new(1);
+        rule.set_outcome(0, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([-1])));
+        rule.set_outcome(1, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([1])));
+        rule.set_outcome(2, Outcome::from_bitvec(1, BitVec::repeat(false, 1), Vec::from([1])));
+        rule.set_outcome(3, Outcome::from_bitvec(1, BitVec::repeat(false, 1), Vec::from([-1])));
+        rule.set_outcome(4, Outcome::from_bitvec(1, BitVec::repeat(false, 1), Vec::from([-1])));
+        rule.set_outcome(5, Outcome::from_bitvec(1, BitVec::repeat(true, 1), Vec::from([-1])));
+        rule.set_outcome(6, Outcome::from_bitvec(1, BitVec::repeat(false, 1), Vec::from([1])));
+        rule.set_outcome(7, Outcome::from_bitvec(1, BitVec::repeat(false, 1), Vec::from([1])));
+
+
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0
+        ]);
+        assert!(state.contains(4));
+
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0
+        ]);
+        assert!(state.contains(5));
+
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
+        ]);
+        assert!(state.contains(6));
+
+        iterate(&rule, &mut universe, &mut state);
+        assert_eq!(&universe.cells[..], bits![
+            0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0
+        ]);
+        assert!(state.contains(5));
     }
 }

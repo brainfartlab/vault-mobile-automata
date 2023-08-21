@@ -10,7 +10,37 @@ use wasm_bindgen_test::*;
 // wasm_bindgen_test_configure!(run_in_worker);
 
 #[wasm_bindgen_test]
-fn mobile_rule_apply() {
+fn mobile_rule_simple_apply() {
+    let mut universe = Universe::new(11);
+
+    let mut state = MobileState::new(universe.span());
+    state.add_position(0);
+
+    let mut rule: MobileRule = MobileRule::new(1);
+    (0..8)
+        .map(|_i| {
+            let progeny: Vec<JsValue> = Vec::from([JsValue::TRUE]);
+            let mobility: Vec<i32> = Vec::from([-1]);
+
+            Outcome::new(progeny, mobility)
+        })
+        .enumerate()
+        .for_each(|(i, outcome)| {
+            rule.set_outcome(i, outcome);
+        });
+
+
+    iterate(&rule, &mut universe, &mut state);
+    assert_eq!(universe.count_alive(), 1);
+    //assert_eq!(universe.get(0), true);
+    // assert_eq!(&universe.cells[..], bits![
+    //     0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0
+    // ]);
+    assert!(state.contains(10));
+}
+
+#[wasm_bindgen_test]
+fn mobile_rule_extended_apply() {
     let mut universe = Universe::new(11);
 
     let mut state = MobileState::new(universe.span());
@@ -22,7 +52,7 @@ fn mobile_rule_apply() {
             let progeny: Vec<JsValue> = Vec::from([JsValue::TRUE, JsValue::TRUE, JsValue::TRUE]);
             let mobility: Vec<i32> = Vec::from([1]);
 
-            Outcome::new(1, progeny, mobility)
+            Outcome::new(progeny, mobility)
         })
         .enumerate()
         .for_each(|(i, outcome)| {
@@ -39,7 +69,7 @@ fn mobile_rule_apply() {
 }
 
 #[wasm_bindgen_test]
-fn mobile_rule_apply_left() {
+fn mobile_rule_extended_apply_left() {
     let mut universe = Universe::new(11);
 
     let mut state = MobileState::new(universe.span());
@@ -51,7 +81,7 @@ fn mobile_rule_apply_left() {
             let progeny: Vec<JsValue> = Vec::from([JsValue::TRUE, JsValue::TRUE, JsValue::TRUE]);
             let mobility: Vec<i32> = Vec::from([-1]);
 
-            Outcome::new(1, progeny, mobility)
+            Outcome::new(progeny, mobility)
         })
         .enumerate()
         .for_each(|(i, outcome)| {
@@ -67,7 +97,7 @@ fn mobile_rule_apply_left() {
 }
 
 #[wasm_bindgen_test]
-fn mobile_rule_apply_right() {
+fn mobile_rule_extended_apply_right() {
     let mut universe = Universe::new(11);
 
     let mut state = MobileState::new(universe.span());
@@ -79,7 +109,7 @@ fn mobile_rule_apply_right() {
             let progeny: Vec<JsValue> = Vec::from([JsValue::TRUE, JsValue::TRUE, JsValue::TRUE]);
             let mobility: Vec<i32> = Vec::from([1]);
 
-            Outcome::new(1, progeny, mobility)
+            Outcome::new(progeny, mobility)
         })
         .enumerate()
         .for_each(|(i, outcome)| {
@@ -108,7 +138,7 @@ fn mobile_rule_generalized_apply() {
             let progeny: Vec<JsValue> = Vec::from([JsValue::TRUE, JsValue::TRUE, JsValue::TRUE]);
             let mobility: Vec<i32> = Vec::from([-1, 1]);
 
-            Outcome::new(1, progeny, mobility)
+            Outcome::new(progeny, mobility)
         })
         .enumerate()
         .for_each(|(i, outcome)| {

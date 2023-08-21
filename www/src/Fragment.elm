@@ -2,7 +2,7 @@ module Fragment exposing
     ( Fragment, Error(..), Span
     , newFragment, updateFragment, getFragmentValue
     , getFragments
-    , toList, toIndexedList, size, getSpan
+    , fromList, toList, toIndexedList, size, getSpan
     , encodeFragment
     )
 
@@ -123,6 +123,44 @@ augment combinations symbol =
 toList : Fragment a -> List a
 toList (Fragment left middle right) =
     List.concat [List.reverse (Array.toList left), [middle], Array.toList right]
+
+
+fromList : List a -> Result Error (Fragment a)
+fromList cells =
+    case cells of
+        [middle] ->
+            Ok (Fragment Array.empty middle Array.empty)
+
+        _ ->
+            case modBy 2 (List.length cells) of
+                0 ->
+                    Err (InvalidFragment "Even number of cells")
+
+                1 ->
+                    let
+                        span: Span
+                        span =
+                            ((List.length cells) - 1) // 2
+
+                        left : Array a
+                        left = Array.fromList <| List.take span cells
+
+                        middleOption : Maybe a
+                        middleOption =
+                            List.drop 2 cells |> List.head
+
+                        right : Array a
+                        right = Array.fromList <| List.drop (span + 1) cells
+                    in
+                    case middleOption of
+                        Just middle ->
+                            Ok (Fragment left middle right)
+
+                        Nothing ->
+                            Err (InvalidFragment "Unexpected error")
+
+                _ ->
+                    Err (InvalidFragment "Unexpected error")
 
 
 toIndexedList : Fragment a -> List (Int, a)

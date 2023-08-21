@@ -1,6 +1,6 @@
 {
-  "short_name": "vault-mobile-automata",
-  "name": "vault-mobile-automata",
+  "short_name": "mobile-automata",
+  "name": "mobile-automata",
   "icons": [
     {
       "src": "./icons/android-chrome-192x192.png",

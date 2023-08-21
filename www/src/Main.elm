@@ -1,21 +1,28 @@
 module Main exposing (main)
 
-import Debug
 import Bitwise
 import Browser
 import Browser.Dom
+import Browser.Events
+import Browser.Navigation as Nav
 import Color exposing (Color)
 import Html exposing (Html)
 import Html.Attributes
 import Set exposing (Set)
-import Task
+import Task exposing (Task)
+import Url
+import Url.Builder as Builder
+import Url.Parser exposing (parse, query)
+import Url.Parser.Query as Query
 
+import Base64
 import Colors.Alpha as A
 import Element as E exposing (Element)
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Input
+import Json.Decode
 import Json.Encode
 import Material.Icons as Filled
 import Material.Icons.Types exposing (Coloring(..), Icon)
@@ -33,22 +40,67 @@ import Fragment exposing (Fragment)
 import Rule exposing
     ( Rule, RuleType(..)
     , Error(..)
-    , Case,  Combination, Progeny, Mobility
+    , Case, Combination, Outcome, Progeny, Mobility
     , newRule
     , getSpan, getType, getCases
-    , updateMobility, updateProgeny, encodeRule
+    , updateMobility, updateProgeny
+    , encodeRule, ruleDecoder
     , getCombination, getProgeny, getMobility, getCases
     )
 
 
 main : Program () Model Msg
 main =
-    Browser.element
+    Browser.application
         { init = init
         , update = update
         , subscriptions = subscriptions
         , view = view
+        , onUrlChange = UrlChanged
+        , onUrlRequest = LinkClicked
         }
+
+
+-- PARSER
+
+
+type alias Config =
+    { rule : Maybe (Rule Cell)
+    }
+
+
+parseConfig : Query.Parser Config
+parseConfig = 
+    Query.map Config (parseRule "rule")
+
+
+parseRule : String -> Query.Parser (Maybe (Rule Cell))
+parseRule representation =
+    Query.custom representation <| \stringList ->
+        case stringList of
+            [encodedConfiguration] ->
+                case Base64.decode encodedConfiguration of
+                    Ok ruleConfiguration ->
+                        let
+                            test : String
+                            test = ruleConfiguration
+
+                            decodedRuleResult : Result Json.Decode.Error (Rule Cell)
+                            decodedRuleResult =
+                                Json.Decode.decodeString (ruleDecoder symbolDecoder) test
+                        in
+                        case decodedRuleResult of
+                            Ok decodedRule ->
+                                Just decodedRule
+
+                            Err _ ->
+                                Nothing
+
+                    Err _ ->
+                        Nothing
+
+            _ ->
+                Nothing
 
 
 -- MODEL
@@ -74,6 +126,7 @@ type SimulationState
 
 type alias State =
     { simulation : SimulationState
+    , key : Nav.Key
     }
 
 
@@ -94,33 +147,45 @@ type alias Settings =
     }
 
 
-type alias Canvas =
-    { width : Float
-    , height : Float
-    }
+type Canvas
+    = Canvas
+        { width : Float
+        , height : Float
+        }
+    | UnknownMeasurements
 
 
 type Error
     = BadRuleUpdate String
+    | InvalidRule
 
 
-init : () -> (Model, Cmd Msg)
-init _ =
+init : () -> Url.Url -> Nav.Key -> (Model, Cmd Msg)
+init _ url key =
+    let
+        defaultRule : Rule Cell
+        defaultRule = newRule Simple 1 [Dead, Live] Dead
+
+        config : Config
+        config =
+            parse (query parseConfig) url
+                |> Maybe.withDefault
+                    { rule = Just defaultRule
+                    }
+    in
     ( { settings =
         { speed = 1
         , cellSize = 3
         , editing = Progeny Nothing
         }
-      , rule = newRule Simple 1 [Dead, Live] Dead
+      , rule = config.rule |> Maybe.withDefault defaultRule
       , state =
           { simulation = Paused
+          , key = key
           }
-      , canvas =
-        { width = 0
-        , height = 0
-        }
+      , canvas = UnknownMeasurements
       }
-    , Task.perform ResizeCanvas Browser.Dom.getViewport
+    , Task.attempt ResizeCanvas (Browser.Dom.getElement "ma-view")
     )
 
 
@@ -136,7 +201,7 @@ updateSettings : SettingsMsg -> Settings -> Settings
 updateSettings settingsMsg settings =
     case settingsMsg of
         ResizeCells newCellSize ->
-            settings
+            { settings | cellSize = newCellSize }
 
         UpdateEditing newEditing ->
             { settings | editing = newEditing }
@@ -169,15 +234,9 @@ updateRule msg rule =
             in
             case newMobilityResult of
                 Ok newMobility ->
-                    let
-                        test = Debug.log "mobility update error" newMobility
-                    in
                     updateMobility (getCombination ruleCase) newMobility rule
 
                 Err error ->
-                    let
-                        test = Debug.log "mobility update error" error
-                    in
                     Ok rule
 
         UpdateProgeny ruleCase progenyModifier index ->
@@ -205,22 +264,50 @@ updateRule msg rule =
 
 
 type Msg
-    = ResizeCanvas Browser.Dom.Viewport
+    = ResizeWindow
+    | ResizeCanvas (Result Browser.Dom.Error Browser.Dom.Element)
     | UpdateSettings SettingsMsg
     | UpdateRule (RuleMsg Int)
     | UpdateState StateMsg
     | HighlightError Error
+    | UrlChanged Url.Url
+    | LinkClicked Browser.UrlRequest
 
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
     case msg of
-        ResizeCanvas viewport ->
-            ( { model
-                | canvas = Canvas viewport.scene.width viewport.scene.height
-              }
+        UrlChanged url ->
+            ( model
             , Cmd.none
             )
+
+        LinkClicked urlRequest ->
+            ( model
+            , Cmd.none
+            )
+
+        ResizeWindow ->
+            ( model
+            , Task.attempt ResizeCanvas (Browser.Dom.getElement "ma-view")
+            )
+
+        ResizeCanvas elementResult ->
+            case elementResult of
+                Err _ ->
+                    ( model
+                    , Cmd.none
+                    )
+
+                Ok element ->
+                    ( { model
+                        | canvas = Canvas
+                            { width = element.element.width
+                            , height = element.element.height
+                            }
+                      }
+                    , Cmd.none
+                    )
 
         UpdateRule ruleMsg ->
             let
@@ -235,10 +322,23 @@ update msg model =
                     )
 
                 Ok newRule ->
+                    let
+                        encodedRule : String
+                        encodedRule =
+                            encodeRule encodeCell newRule
+                                |> Json.Encode.encode 0
+                                |> Base64.encode
+
+                        newUrl : String
+                        newUrl =
+                            Builder.relative []
+                                [ Builder.string "rule" encodedRule
+                                ]
+                    in
                     ( { model
                         | rule = newRule
                       }
-                    , Cmd.none
+                    , Nav.pushUrl model.state.key newUrl
                     )
 
         UpdateState stateMsg ->
@@ -256,9 +356,6 @@ update msg model =
             )
 
         HighlightError error ->
-            let
-                test = Debug.log "error" error
-            in
             ( model
             , Cmd.none
             )
@@ -269,15 +366,18 @@ update msg model =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Sub.none
+    Browser.Events.onResize (\_ _ -> ResizeWindow)
 
 
 -- VIEW
 
 
-view : Model -> Html Msg
+view : Model -> Browser.Document Msg
 view model =
-    E.layout [] (viewPage model)
+    { title = "Mobile Automata"
+    , body =
+        [ E.layout [] (viewPage model) ]
+    }
 
 
 viewPage : Model -> Element Msg
@@ -833,22 +933,40 @@ drawState offset isActive isHighlighted =
 
 viewTape : Model -> Element Msg
 viewTape model =
+    let
+        baseAttributes: List (Html.Attribute msg)
+        baseAttributes =
+            [ mapCustomAttribute (Rule model.rule)
+            , mapCustomAttribute (Status model.state.simulation)
+            , mapCustomAttribute (CellSize model.settings.cellSize)
+            ]
+
+        attributes : List(Html.Attribute msg)
+        attributes =
+            case model.canvas of
+                Canvas { width, height } ->
+                    List.append baseAttributes
+                        [ mapCustomAttribute (CanvasWidth width)
+                        , mapCustomAttribute (CanvasHeight height)
+                        ]
+
+                UnknownMeasurements ->
+                    baseAttributes
+    in
     E.el
         [ E.width E.fill
         , E.height E.fill
+        , id "ma-view"
         ]
         ( E.html <|
             viewCustomElement
-                [ mapCustomAttribute (Rule model.rule)
-                , mapCustomAttribute (Status model.state.simulation)
-                , mapCustomAttribute (CellSize model.settings.cellSize)
-                ]
+                attributes
                 [ Html.canvas
                     [ Html.Attributes.id "ma-canvas"
                     ] []
-                , Html.canvas
-                    [ Html.Attributes.id "ma-mobility"
-                    ] []
+                --, Html.canvas
+                    --[ Html.Attributes.id "ma-mobility"
+                    --] []
                 ]
         )
 
@@ -862,6 +980,8 @@ type AutomataAttribute
     = Rule (Rule Cell)
     | Status SimulationState
     | CellSize Int
+    | CanvasWidth Float
+    | CanvasHeight Float
 
 
 mapCustomAttribute : AutomataAttribute -> Html.Attribute a
@@ -885,6 +1005,12 @@ mapCustomAttribute attribute =
 
                 CellSize cellSize ->
                     { field = "cell-size", value = String.fromInt cellSize }
+
+                CanvasWidth width ->
+                    { field = "canvas-width", value = String.fromInt <| floor width }
+
+                CanvasHeight height ->
+                    { field = "canvas-height", value = String.fromInt <| floor height }
     in
     Html.Attributes.attribute fields.field fields.value
 
@@ -897,7 +1023,7 @@ toggleProgeny progeny index =
     let
         currentProgenyAtIndex : Maybe Cell
         currentProgenyAtIndex =
-            Debug.log "current progeny" (Fragment.getFragmentValue progeny index)
+            Fragment.getFragmentValue progeny index
     in
     case currentProgenyAtIndex of
         Nothing ->
@@ -917,9 +1043,6 @@ toggleProgeny progeny index =
 
 toggleMobility : Mobility -> Int -> Result Error Mobility
 toggleMobility mobility index =
-    let
-        test = Debug.log "triggered mobility" index
-    in
     if Set.member index mobility then
         Ok (Set.remove index mobility)
     else
@@ -974,3 +1097,24 @@ caseToInt ruleCase =
         |> Fragment.toList
         |> List.map cellToInt
         |> List.foldl (\i v -> i + 2*v) 0
+
+
+id : String -> E.Attribute msg
+id =
+    Html.Attributes.id >> E.htmlAttribute
+
+
+-- DECODERs
+
+
+cellDecoder : Int -> Json.Decode.Decoder Cell
+cellDecoder index =
+    case index of
+        0 -> Json.Decode.succeed Dead
+        1 -> Json.Decode.succeed Live
+        _ -> Json.Decode.fail "Invalid cell"
+
+
+symbolDecoder : Json.Decode.Decoder (List Cell)
+symbolDecoder =
+    Json.Decode.list <| Json.Decode.andThen cellDecoder Json.Decode.int

@@ -1,4 +1,4 @@
-module FragmentTests exposing (newFragmentTests, updateFragmentTests, getFragmentTests, toIndexedListTests)
+module FragmentTests exposing (newFragmentTests, updateFragmentTests, getFragmentTests, toIndexedListTests, fromListTests)
 
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
@@ -165,4 +165,24 @@ encodeFragmentTests =
                 encodeFragment testEncoder (newFragment Dead 2)
                     |> Json.Encode.encode 0
                     |> Expect.equal "[0,0,0,0,0]"
+        ]
+
+
+fromListTests : Test
+fromListTests =
+    describe "fromList"
+        [ test "without sides" <|
+            \_ ->
+                fromList [Live]
+                    |> Result.andThen (\l -> Ok (Fragment.toList l))
+                    |> Expect.equal (Ok [Live])
+        , test "with sides" <|
+            \_ ->
+                fromList [Live, Live, Live]
+                    |> Result.andThen (\l -> Ok (Fragment.toList l))
+                    |> Expect.equal (Ok [Live, Live, Live])
+        , test "even" <|
+            \_ ->
+                fromList [Live, Live]
+                    |> Expect.err
         ]
