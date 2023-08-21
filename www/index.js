@@ -2,9 +2,6 @@ import * as wasm from "vault-mobile-automata";
 import "./elm.js"
 
 var app = Elm.Main.init({ node: document.querySelector('main') });
-app.ports.calculateFibonacci.subscribe(function(nth) {
-  app.ports.receiveFibonacci.send(wasm.fibonacci(nth));
-});
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -15,3 +12,21 @@ if ('serviceWorker' in navigator) {
     });
   });
 }
+
+customElements.define('mobile-automata',
+  class extends HTMLElement {
+    constructor() {
+      super();
+    }
+
+    connectedCallback() {
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+      console.log(`${name} changed to ${newValue}`);
+    }
+
+    static get observedAttributes() {
+      return ['rule', 'cell-size', 'state'];
+    }
+  });

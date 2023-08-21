@@ -6,6 +6,7 @@ import Browser
 import Browser.Dom
 import Color exposing (Color)
 import Html exposing (Html)
+import Html.Attributes
 import Set exposing (Set)
 import Task
 
@@ -15,6 +16,7 @@ import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Input
+import Json.Encode
 import Material.Icons as Filled
 import Material.Icons.Types exposing (Coloring(..), Icon)
 import TypedSvg exposing (circle, rect, svg)
@@ -151,35 +153,41 @@ updateState stateMsg state =
             { state | simulation = newSimulationState }
 
 
-type RuleMsg
-    = UpdateMobility (Int -> Result Error Mobility) (Combination Cell) Int
-    | UpdateProgeny  (Int -> Result Error (Progeny Cell)) (Combination Cell) Int
+type RuleMsg a
+    = UpdateMobility (Case Cell) (a -> Result Error Mobility) a
+    | UpdateProgeny  (Case Cell) (a -> Result Error (Progeny Cell)) a
     | UpdateType RuleType
 
 
-updateRule : RuleMsg -> Rule Cell -> Result Rule.Error (Rule Cell)
+updateRule : RuleMsg a -> Rule Cell -> Result Rule.Error (Rule Cell)
 updateRule msg rule =
     case msg of
-        UpdateMobility mobilityModifier combination index ->
+        UpdateMobility ruleCase mobilityModifier index ->
             let
                 newMobilityResult : Result Error Mobility
                 newMobilityResult = mobilityModifier index
             in
             case newMobilityResult of
                 Ok newMobility ->
-                    updateMobility combination newMobility rule
+                    let
+                        test = Debug.log "mobility update error" newMobility
+                    in
+                    updateMobility (getCombination ruleCase) newMobility rule
 
                 Err error ->
+                    let
+                        test = Debug.log "mobility update error" error
+                    in
                     Ok rule
 
-        UpdateProgeny progenyModifier combination index ->
+        UpdateProgeny ruleCase progenyModifier index ->
             let
                 newProgenyResult : Result Error (Progeny Cell)
                 newProgenyResult = progenyModifier index
             in
             case newProgenyResult of
                 Ok newProgeny ->
-                    updateProgeny combination newProgeny rule
+                    updateProgeny (getCombination ruleCase) newProgeny rule
 
                 Err error ->
                     Ok rule
@@ -199,7 +207,7 @@ updateRule msg rule =
 type Msg
     = ResizeCanvas Browser.Dom.Viewport
     | UpdateSettings SettingsMsg
-    | UpdateRule RuleMsg
+    | UpdateRule (RuleMsg Int)
     | UpdateState StateMsg
     | HighlightError Error
 
@@ -281,6 +289,7 @@ viewPage model =
         ]
         [ viewControls model
         , viewCases model.settings.editing model.rule
+        , viewTape model
         ]
 
 
@@ -497,6 +506,89 @@ viewCases editing rule =
         )
 
 
+getProgenyEvents : Case Cell -> Int -> CellEvents Msg
+getProgenyEvents ruleCase progenyIndex =
+    let
+        clickMsg : Int -> Msg
+        clickMsg index =
+            UpdateRule <| UpdateProgeny ruleCase (toggleProgeny <| getProgeny ruleCase) index
+
+        hoverMsg : Int -> Msg
+        hoverMsg index =
+            UpdateSettings <| UpdateEditing <| Progeny <| Just (Highlighted ruleCase index)
+
+        leaveMsg : Msg
+        leaveMsg =
+            UpdateSettings <| UpdateEditing <| Progeny Nothing
+    in
+    { click = clickMsg progenyIndex
+    , hover = hoverMsg progenyIndex
+    , leave = leaveMsg
+    }
+
+
+getMobilityEvents : RuleType -> Case Cell -> Int -> CellEvents Msg
+getMobilityEvents ruleType ruleCase mobilityIndex =
+    let
+        clickMsg : Int -> Msg
+        clickMsg index =
+            case ruleType of
+                Simple ->
+                    UpdateRule <| UpdateMobility ruleCase replaceMobility index
+
+                Extended ->
+                    UpdateRule <| UpdateMobility ruleCase replaceMobility index
+
+                Generalized ->
+                    UpdateRule <| UpdateMobility ruleCase (toggleMobility <| getMobility ruleCase) index
+
+        hoverMsg : Int -> Msg
+        hoverMsg index =
+            UpdateSettings <| UpdateEditing <| Mobility <| Just (Highlighted ruleCase index)
+
+        leaveMsg : Msg
+        leaveMsg =
+            UpdateSettings <| UpdateEditing <| Mobility Nothing
+    in
+    { click = clickMsg mobilityIndex
+    , hover = hoverMsg mobilityIndex
+    , leave = leaveMsg
+    }
+
+
+highlightProgeny : Case Cell -> Maybe Highlighted -> Int -> Bool
+highlightProgeny ruleCase highlightedOption index =
+    case highlightedOption of
+        Just highlighted ->
+            if highlighted.ruleCase == ruleCase then
+                index == highlighted.index
+            else
+                False
+
+        Nothing -> False
+
+
+highlightMobility : RuleType -> Case Cell -> Maybe Highlighted -> Int -> Bool
+highlightMobility ruleType ruleCase highlightedOption index =
+    case highlightedOption of
+        Just highlighted ->
+            if highlighted.ruleCase == ruleCase then
+                case ruleType of
+                    Simple ->
+                        index == highlighted.index && not (Set.member index <| getMobility ruleCase) && index /= 0
+
+                    Extended ->
+                        index == highlighted.index && not (Set.member index <| getMobility ruleCase)
+
+                    Generalized ->
+                        index == highlighted.index
+
+            else
+                False
+
+        Nothing -> False
+
+
 drawCase : Editing -> Fragment.Span -> RuleType -> Case Cell -> Element Msg
 drawCase editing span ruleType ruleCase =
     let
@@ -504,6 +596,27 @@ drawCase editing span ruleType ruleCase =
         drawDimensions : Offset
         drawDimensions =
             addOffset (Offset 2 2) (getCellOffset (2 * span + 1) 2)
+
+        progenyHighlighter : Maybe (Int -> Bool)
+        progenyHighlighter =
+            case editing of
+                Progeny highlightedOption -> Just <| highlightProgeny ruleCase highlightedOption 
+                _ -> Nothing
+
+        mobilityHighlighter : Maybe (Int -> Bool)
+        mobilityHighlighter =
+            case editing of
+                Mobility highlightedOption -> Just <| highlightMobility ruleType ruleCase highlightedOption
+                _ -> Nothing
+
+        eventConfiguration : Int -> CellEvents Msg
+        eventConfiguration =
+            case editing of
+                Progeny _ ->
+                    getProgenyEvents ruleCase
+
+                Mobility _ ->
+                    getMobilityEvents ruleType ruleCase
     in
     E.html <|
         TypedSvg.svg
@@ -511,91 +624,39 @@ drawCase editing span ruleType ruleCase =
             , height <| px <| drawDimensions.x
             , viewBox -1 -1 drawDimensions.y drawDimensions.x
             ]
-            [ drawCombination ruleCase
-            , drawProgeny editing span ruleCase
-            , drawStates editing span ruleCase
-            , drawEventCells editing span
+            [ drawCombination (getCellOffset 0 0) <|
+                getCombination ruleCase
+            , drawProgeny (getCellOffset 1 span) progenyHighlighter <|
+                getProgeny ruleCase
+            , drawStates span mobilityHighlighter <|
+                getMobility ruleCase
+            , drawEventCells eventConfiguration span ruleCase
             ]
 
 
-drawCombination : Case Cell -> Svg Msg
-drawCombination ruleCase =
-    let
-        offset : Offset
-        offset = getCellOffset 0 0
-    in
-    drawCells offset (getCombination ruleCase) Nothing
+drawCombination : Offset -> Combination Cell -> Svg Msg
+drawCombination offset combination =
+    combination
+        |> Fragment.toIndexedList
+        |> List.indexedMap
+            ( \i (index, cell) ->
+                drawCell (addOffset offset (getCellOffset 0 i)) cell False
+            )
+        |> TypedSvg.g []
 
 
-drawProgeny : Editing -> Fragment.Span -> Case Cell -> Svg Msg
-drawProgeny editing span ruleCase =
-    let
-        progeny : Progeny Cell
-        progeny =
-            getProgeny ruleCase
-
-        offset: Offset
-        offset =
-            getCellOffset 1 (span - (Fragment.getSpan progeny))
-    in
-    drawCells offset (getProgeny ruleCase) <|
-        case editing of
-            Progeny highlightedOption ->
-                let
-                    -- helper function for progeny event
-                    progenyModifier : Int -> Result Error (Progeny Cell)
-                    progenyModifier index =
-                        toggleProgeny (getProgeny ruleCase) index
-
-                    -- progeny event
-                    progenyMsg : Int -> Msg
-                    progenyMsg index =
-                        UpdateRule (UpdateProgeny progenyModifier (getCombination ruleCase) index)
-
-                    -- hover event
-                    hoverMsg : Int -> Msg
-                    hoverMsg index =
-                        UpdateSettings <| UpdateEditing <| Progeny <| Just (Highlighted ruleCase index)
-                in
-                Just
-                    { click = progenyMsg
-                    , hover = hoverMsg
-                    , leave = UpdateSettings (UpdateEditing (Progeny Nothing))
-                    , highlighted =
-                        case highlightedOption of
-                            Nothing ->
-                                Nothing
-
-                            Just highlighted ->
-                                if highlighted.ruleCase == ruleCase then
-                                    Just highlighted.index
-                                 else
-                                     Nothing
-                    }
-
-            Mobility highlightedOption ->
-                let
-                    -- helper function for progeny event
-                    mobilityModifier : Int -> Result Error (Mobility)
-                    mobilityModifier index =
-                        toggleMobility (getMobility ruleCase) index
-
-                    -- mobility event
-                    mobilityMsg : Int -> Msg
-                    mobilityMsg index =
-                        UpdateRule (UpdateMobility mobilityModifier (getCombination ruleCase) index)
-
-                    -- hover event
-                    hoverMsg : Int -> Msg
-                    hoverMsg index =
-                        UpdateSettings <| UpdateEditing <| Mobility <| Just (Highlighted ruleCase index)
-                in
-                Just
-                    { click = mobilityMsg
-                    , hover = hoverMsg
-                    , leave = UpdateSettings (UpdateEditing (Mobility Nothing))
-                    , highlighted = Nothing
-                    }
+drawProgeny : Offset -> Maybe (Int -> Bool) -> Progeny Cell -> Svg Msg
+drawProgeny offset highlighterOption progeny =
+    progeny
+        |> Fragment.toIndexedList
+        |> List.map
+            ( \(index, cell) ->
+                drawCell (addOffset offset (getCellOffset 0 index)) cell <|
+                    case highlighterOption of
+                        Nothing -> False
+                        Just highlighter -> highlighter index
+            )
+        |> TypedSvg.g []
 
 
 type alias Offset =
@@ -655,52 +716,23 @@ type alias InteractionEvents a =
     }
 
 
-drawCells : Offset -> Fragment Cell -> Maybe (InteractionEvents Int) -> Svg Msg
-drawCells offset cells interactionEventsOption =
-    cells
-        |> Fragment.toIndexedList
-        |> List.indexedMap
-            ( \i (index, cell) ->
-                case interactionEventsOption of
-                    Nothing ->
-                        drawCell (addOffset offset (getCellOffset 0 i)) (Opacity 1) cell Nothing False
-
-                    Just { click, hover, leave, highlighted } ->
-                        let
-                            events : { click : Msg, hover : Msg, leave : Msg }
-                            events =
-                                { click = click index
-                                , hover = hover index
-                                , leave = leave
-                                }
-                        in
-                        case highlighted of
-                            Nothing -> 
-                                drawCell (addOffset offset (getCellOffset 0 i)) (Opacity 1) cell (Just events) False
-
-                            Just highlightedIndex ->
-                                drawCell (addOffset offset (getCellOffset 0 i)) (Opacity 1) cell (Just events) (index == highlightedIndex)
-            )
-        |> TypedSvg.g []
-
-
-drawEventCells : Editing -> Fragment.Span -> Svg Msg
-drawEventCells editing span =
+drawEventCells : (Int -> CellEvents Msg) -> Fragment.Span -> Case Cell -> Svg Msg
+drawEventCells cellEvents span ruleCase =
     let
         offset: Offset
         offset =
             getCellOffset 1 0
     in
-    List.range 0 (2 * span)
+    List.range -span span
         |> List.map
             ( \i ->
-                drawCell (addOffset offset (getCellOffset 0 i)) (Opacity 0) Dead Nothing False
+                drawEventCell (addOffset offset (getCellOffset 0 (i + span))) <| cellEvents i
             )
         |> TypedSvg.g []
 
 
-drawCell : Offset -> Opacity -> Cell -> Maybe { click : Msg, hover : Msg, leave : Msg } -> Bool -> Svg Msg
-drawCell offset opacity cell eventOptions isHighlighted =
+drawCell : Offset -> Cell -> Bool -> Svg Msg
+drawCell offset cell isHighlighted =
     let
         attributes : List (Attribute msg)
         attributes =
@@ -713,50 +745,58 @@ drawCell offset opacity cell eventOptions isHighlighted =
                     getHighlightedCellColor cell
                 else
                     getCellColor cell
-            , fillOpacity opacity
             , stroke <| Paint Color.black
-            , strokeOpacity opacity
             , strokeWidth <| px 2
             ]
     in
     TypedSvg.rect
-        ( case eventOptions of
-            Nothing ->
-                attributes
-
-            Just events ->
-                List.append
-                    [ TypedSvg.Events.onClick events.click
-                    , TypedSvg.Events.onMouseOver events.hover
-                    , TypedSvg.Events.onMouseLeave events.leave
-                    ]
-                    attributes
-        )
+        attributes
         []
 
 
-drawStates : Editing -> Fragment.Span -> Case Cell -> Svg Msg
-drawStates editing span ruleCase =
+type alias CellEvents msg =
+    { click : msg
+    , hover : msg
+    , leave : msg
+    }
+
+
+drawEventCell : Offset -> CellEvents Msg -> Svg Msg
+drawEventCell offset cellEvents =
+    let
+        attributes : List (Attribute Msg)
+        attributes =
+            [ x <| px offset.x
+            , y <| px offset.y
+            , width  <| px <| toFloat cellDrawSize
+            , height <| px <| toFloat cellDrawSize
+            , fillOpacity <| Opacity 0
+            , strokeOpacity <| Opacity 0
+            , strokeWidth <| px 2
+            , TypedSvg.Events.onClick cellEvents.click
+            , TypedSvg.Events.onMouseOver cellEvents.hover
+            , TypedSvg.Events.onMouseLeave cellEvents.leave
+            ]
+    in
+    TypedSvg.rect
+        attributes
+        []
+
+
+drawStates : Fragment.Span -> Maybe (Int -> Bool) -> Mobility -> Svg Msg
+drawStates span highlighterOption mobility =
     let
         offset : Offset
         offset =
             getCellOffset 1 0
     in
-    getMobility ruleCase
-        |> Set.toList
+    List.range -span span
         |> List.map
             (\s ->
-                case editing of
-                    Progeny _ ->
-                        drawState (addOffset offset (getCellOffset 0 (span + s))) False
-
-                    Mobility highlightedOption ->
-                        case highlightedOption of
-                            Nothing ->
-                                drawState (addOffset offset (getCellOffset 0 (span + s))) False
-
-                            Just highlightedData ->
-                                drawState (addOffset offset (getCellOffset 0 (span + s))) (s == highlightedData.index)
+                drawState (addOffset offset (getCellOffset 0 (span + s))) (Set.member s mobility) <|
+                    case highlighterOption of
+                        Nothing -> False
+                        Just highlighter -> highlighter s
             )
         |> TypedSvg.g []
 
@@ -765,8 +805,8 @@ stateDrawSize : Int
 stateDrawSize = (cellDrawSize // 2) - 2
 
 
-drawState : Offset -> Bool -> Svg Msg
-drawState offset isHighlighted =
+drawState : Offset -> Bool -> Bool -> Svg Msg
+drawState offset isActive isHighlighted =
     let
         attributes : List (Attribute Msg)
         attributes =
@@ -774,17 +814,79 @@ drawState offset isHighlighted =
             , cy <| px (offset.y + (toFloat cellDrawSize) / 2)
             , r <| px <| toFloat stateDrawSize
             , fill <| 
-                if isHighlighted then
+                if isHighlighted || not isActive then
                     PaintNone
                 else
                     Paint <| Color.black
-            , stroke <| Paint <| Color.black
+            , stroke <|
+                if isHighlighted || isActive then
+                    Paint <| Color.black
+                else
+                    PaintNone
             , strokeWidth <| px <| 1
             ]
     in
     TypedSvg.circle
         attributes
         []
+
+
+viewTape : Model -> Element Msg
+viewTape model =
+    E.el
+        [ E.width E.fill
+        , E.height E.fill
+        ]
+        ( E.html <|
+            viewCustomElement
+                [ mapCustomAttribute (Rule model.rule)
+                , mapCustomAttribute (Status model.state.simulation)
+                , mapCustomAttribute (CellSize model.settings.cellSize)
+                ]
+                [ Html.canvas
+                    [ Html.Attributes.id "ma-canvas"
+                    ] []
+                , Html.canvas
+                    [ Html.Attributes.id "ma-mobility"
+                    ] []
+                ]
+        )
+
+
+viewCustomElement : List (Html.Attribute a) -> List (Html a) -> Html a
+viewCustomElement =
+    Html.node "mobile-automata"
+
+
+type AutomataAttribute
+    = Rule (Rule Cell)
+    | Status SimulationState
+    | CellSize Int
+
+
+mapCustomAttribute : AutomataAttribute -> Html.Attribute a
+mapCustomAttribute attribute =
+    let
+        fields : { field : String, value : String }
+        fields =
+            case attribute of
+                Rule rule ->
+                    { field = "rule", value = Json.Encode.encode 0 <| encodeRule encodeCell rule }
+
+                Status simulationState ->
+                    let
+                        stateString : String
+                        stateString =
+                            case simulationState of
+                                Paused -> "paused"
+                                Running -> "running"
+                    in
+                    { field = "state", value = stateString }
+
+                CellSize cellSize ->
+                    { field = "cell-size", value = String.fromInt cellSize }
+    in
+    Html.Attributes.attribute fields.field fields.value
 
 
 -- HELPERS
@@ -815,10 +917,18 @@ toggleProgeny progeny index =
 
 toggleMobility : Mobility -> Int -> Result Error Mobility
 toggleMobility mobility index =
+    let
+        test = Debug.log "triggered mobility" index
+    in
     if Set.member index mobility then
         Ok (Set.remove index mobility)
     else
         Ok (Set.insert index mobility)
+
+
+replaceMobility : Int -> Result Error Mobility
+replaceMobility index =
+    Ok (Set.singleton index)
 
 
 mapFragmentError : Fragment.Error -> Error
@@ -846,6 +956,11 @@ cellToInt cell =
     case cell of
         Dead -> 0
         Live -> 1
+
+
+encodeCell : Cell -> Json.Encode.Value
+encodeCell cell =
+    Json.Encode.int <| cellToInt cell
 
 
 caseToInt: Case Cell -> Int
