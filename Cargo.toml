@@ -29,7 +29,7 @@ wee_alloc = { version = "0.4.2", optional = true }
 bitvec = "1.0.1"
 
 [dev-dependencies]
-wasm-bindgen-test = "0.2"
+wasm-bindgen-test = "0.3"
 
 [profile.release]
 lto = true           # enable advanced / slower LLVM optimizations

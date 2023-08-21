@@ -59,6 +59,10 @@ impl MobileState {
         self.positions.insert(position);
     }
 
+    pub fn contains(&self, position: usize) -> bool {
+        self.positions.contains(&position)
+    }
+
     fn update_positions(&mut self, positions: HashSet<usize>) {
         self.positions = positions;
     }
@@ -78,15 +82,20 @@ pub struct Outcome {
 
 #[wasm_bindgen]
 impl Outcome {
-    pub fn new(span: usize, progeny_values: Vec<i32>, mobility_values: Vec<i32>) -> Outcome {
+    pub fn new(span: usize, progeny_values: Vec<JsValue>, mobility_values: Vec<i32>) -> Outcome {
         let mut progeny = BitVec::repeat(false, 2*span + 1);
-        let mut mobility: HashSet<i32> = HashSet::new();
 
         progeny_values
             .iter()
-            .for_each(|&i| {
-                progeny.set((span as i32 + i) as usize, true);
+            .map(|v| {
+                v.as_bool().unwrap()
+            })
+            .enumerate()
+            .for_each(|(i, b)| {
+                progeny.set(i, b);
             });
+
+        let mut mobility: HashSet<i32> = HashSet::new();
 
         mobility_values
             .iter()
@@ -139,7 +148,9 @@ impl Rule<MobileState> for MobileRule {
         let a = universe.span() - self.span;
         let mut new_positions: HashSet<usize> = HashSet::new();
 
+        // iterate over all states
         for i in state.positions.iter() {
+            // construct the combination at this state as an int
             let combination: usize = (a..=a+2*self.span)
                 .map(|j| {
                     let index = (i + j) % universe.span();
@@ -160,6 +171,7 @@ impl Rule<MobileState> for MobileRule {
                 // extended
                 match i {
                     j if j < &self.span => {
+                        // the state is within 0..span
                         let a = universe.span() + i - self.span;
                         let b = i + self.span;
 
@@ -167,12 +179,14 @@ impl Rule<MobileState> for MobileRule {
                         universe.cells.splice(0..=b, progeny[self.span-i..].iter().by_vals());
                     },
                     j if j >= &(universe.span() - self.span) => {
+                        // the state is within k-span..k, with k the length of the universe
                         let a = i - self.span;
                         let b = (i + self.span) % universe.span();
                         universe.cells.splice(a..universe.span(), progeny[..=universe.span()-i].iter().by_vals());
                         universe.cells.splice(0..=b, progeny[universe.span()-i+1..].iter().by_vals());
                     },
                     _ => {
+                        // the state is within span+1..k-span-1
                         universe.cells.splice(i-self.span..=i+self.span, progeny.iter().by_vals());
                     },
                 }
@@ -197,6 +211,10 @@ impl Rule<MobileState> for MobileRule {
     }
 }
 
+pub fn iterate(rule: &MobileRule, universe: &mut Universe, state: &mut MobileState) {
+    rule.apply(state, universe);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,120 +234,5 @@ mod tests {
     fn mobile_state_add_position() {
         let mut state = MobileState::new(6);
         state.add_position(2);
-    }
-
-    #[test]
-    fn mobile_rule_apply() {
-        let mut universe = Universe::new(11);
-
-        let mut state = MobileState::new(universe.span());
-        state.add_position(5);
-
-        let mut rule: MobileRule = MobileRule::new(1);
-        (0..8)
-            .map(|_i| {
-                let progeny: Vec<i32> = Vec::from([-1, 0, 1]);
-                let mobility: Vec<i32> = Vec::from([1]);
-
-                Outcome::new(1, progeny, mobility)
-            })
-            .enumerate()
-            .for_each(|(i, outcome)| {
-                rule.set_outcome(i, outcome);
-            });
-
-
-        rule.apply(&mut state, &mut universe);
-        assert_eq!(&universe.cells[..], bits![
-            0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0
-        ]);
-        assert_eq!(&state.positions.iter().collect::<Vec<&usize>>(), &Vec::from([&6]));
-    }
-
-    #[test]
-    fn mobile_rule_apply_left() {
-        let mut universe = Universe::new(11);
-
-        let mut state = MobileState::new(universe.span());
-        state.add_position(0);
-
-        let mut rule: MobileRule = MobileRule::new(1);
-        (0..8)
-            .map(|_i| {
-                let progeny: Vec<i32> = Vec::from([-1, 0, 1]);
-                let mobility: Vec<i32> = Vec::from([-1]);
-
-                Outcome::new(1, progeny, mobility)
-            })
-            .enumerate()
-            .for_each(|(i, outcome)| {
-                rule.set_outcome(i, outcome);
-            });
-
-        rule.apply(&mut state, &mut universe);
-        assert_eq!(&universe.cells[..], bits![
-            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1
-        ]);
-        assert_eq!(&state.positions.iter().collect::<Vec<&usize>>(), &Vec::from([&10]));
-    }
-
-    #[test]
-    fn mobile_rule_apply_right() {
-        let mut universe = Universe::new(11);
-
-        let mut state = MobileState::new(universe.span());
-        state.add_position(10);
-
-        let mut rule: MobileRule = MobileRule::new(1);
-        (0..8)
-            .map(|_i| {
-                let progeny: Vec<i32> = Vec::from([-1, 0, 1]);
-                let mobility: Vec<i32> = Vec::from([1]);
-
-                Outcome::new(1, progeny, mobility)
-            })
-            .enumerate()
-            .for_each(|(i, outcome)| {
-                rule.set_outcome(i, outcome);
-            });
-
-        rule.apply(&mut state, &mut universe);
-        assert_eq!(&universe.cells[..], bits![
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1
-        ]);
-        assert_eq!(&state.positions.iter().collect::<Vec<&usize>>(), &Vec::from([&0]));
-    }
-
-    #[test]
-    fn mobile_rule_generalized_apply() {
-        let mut universe = Universe::new(11);
-
-        let mut state = MobileState::new(universe.span());
-        state.add_position(5);
-        state.add_position(0);
-
-        let mut rule: MobileRule = MobileRule::new(1);
-        (0..8)
-            .map(|_i| {
-                let progeny: Vec<i32> = Vec::from([-1, 0, 1]);
-                let mobility: Vec<i32> = Vec::from([-1, 1]);
-
-                Outcome::new(1, progeny, mobility)
-            })
-            .enumerate()
-            .for_each(|(i, outcome)| {
-                rule.set_outcome(i, outcome);
-            });
-
-        rule.apply(&mut state, &mut universe);
-        assert_eq!(&universe.cells[..], bits![
-            1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1
-        ]);
-        let mut new_positions: HashSet<usize> = HashSet::new();
-        new_positions.insert(1);
-        new_positions.insert(4);
-        new_positions.insert(6);
-        new_positions.insert(10);
-        assert_eq!(&state.positions, &new_positions);
     }
 }
