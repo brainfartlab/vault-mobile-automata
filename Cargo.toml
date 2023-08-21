@@ -1,5 +1,5 @@
 [package]
-name = "vault-mobile-automata"
+name = "mobile-automata"
 version = "0.1.0"
 authors = ["Antoine Vandermeersch <avdmeers@gmail.com>"]
 edition = "2018"

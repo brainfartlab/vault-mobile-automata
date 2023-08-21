@@ -3,7 +3,7 @@
 //#![cfg(target_arch = "wasm32")]
 
 extern crate wasm_bindgen_test;
-use vault_mobile_automata::*;
+use mobile_automata::*;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
