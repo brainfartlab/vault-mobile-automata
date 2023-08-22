@@ -16,12 +16,16 @@ import Url.Parser exposing (parse, query)
 import Url.Parser.Query as Query
 
 import Base64
+import Bytes exposing (Endianness(..))
+import Bytes.Decode
+import Bytes.Encode
 import Colors.Alpha as A
 import Element as E exposing (Element)
 import Element.Background as Background
 import Element.Border as Border
 import Element.Font as Font
 import Element.Input as Input
+import Flate
 import Json.Decode
 import Json.Encode
 import Material.Icons as Filled
@@ -65,7 +69,7 @@ main =
 
 
 type alias Config =
-    { rule : Maybe (Rule Cell)
+    { rule : Result Error (Rule Cell)
     }
 
 
@@ -74,33 +78,36 @@ parseConfig =
     Query.map Config (parseRule "rule")
 
 
-parseRule : String -> Query.Parser (Maybe (Rule Cell))
+parseRule : String -> Query.Parser (Result Error (Rule Cell))
 parseRule representation =
-    Query.custom representation <| \stringList ->
+    Query.custom representation <| ( \stringList ->
         case stringList of
             [encodedConfiguration] ->
-                case Base64.decode encodedConfiguration of
-                    Ok ruleConfiguration ->
-                        let
-                            test : String
-                            test = ruleConfiguration
+                let
+                    bytesDecoder : Bytes.Decode.Decoder String
+                    bytesDecoder =
+                        Bytes.Decode.unsignedInt32 BE
+                            |> Bytes.Decode.andThen Bytes.Decode.string
 
-                            decodedRuleResult : Result Json.Decode.Error (Rule Cell)
-                            decodedRuleResult =
-                                Json.Decode.decodeString (ruleDecoder symbolDecoder) test
-                        in
-                        case decodedRuleResult of
-                            Ok decodedRule ->
-                                Just decodedRule
+                    jsonDecode : String -> Result Error (Rule Cell)
+                    jsonDecode decodedJson =
+                        case Json.Decode.decodeString (ruleDecoder symbolDecoder) decodedJson of
+                            Ok rule ->
+                                Ok rule
 
-                            Err _ ->
-                                Nothing
-
-                    Err _ ->
-                        Nothing
+                            Err error ->
+                                Err InvalidRule
+                in
+                encodedConfiguration
+                    |> Base64.toBytes
+                    |> Maybe.andThen Flate.inflateGZip
+                    |> Maybe.andThen (Bytes.Decode.decode <| bytesDecoder)
+                    |> Result.fromMaybe InvalidRule
+                    |> Result.andThen jsonDecode
 
             _ ->
-                Nothing
+                Err InvalidRule
+    )
 
 
 -- MODEL
@@ -170,7 +177,7 @@ init _ url key =
         config =
             parse (query parseConfig) url
                 |> Maybe.withDefault
-                    { rule = Just defaultRule
+                    { rule = Ok defaultRule
                     }
     in
     ( { settings =
@@ -178,7 +185,7 @@ init _ url key =
         , cellSize = 3
         , editing = Progeny Nothing
         }
-      , rule = config.rule |> Maybe.withDefault defaultRule
+      , rule = config.rule |> Result.withDefault defaultRule
       , state =
           { simulation = Paused
           , key = key
@@ -195,6 +202,8 @@ init _ url key =
 type SettingsMsg
     = ResizeCells Int
     | UpdateEditing Editing
+    | IncreaseSpeed
+    | DecreaseSpeed
 
 
 updateSettings : SettingsMsg -> Settings -> Settings
@@ -205,6 +214,22 @@ updateSettings settingsMsg settings =
 
         UpdateEditing newEditing ->
             { settings | editing = newEditing }
+
+        IncreaseSpeed ->
+            let
+                speedCap : Int
+                speedCap =
+                    min (2 * settings.speed) 16
+            in
+            { settings | speed = speedCap }
+
+        DecreaseSpeed ->
+            let
+                speedCap : Int
+                speedCap =
+                    max (settings.speed // 2) 1
+            in
+            { settings | speed = speedCap }
 
 
 type StateMsg
@@ -323,11 +348,22 @@ update msg model =
 
                 Ok newRule ->
                     let
+                        stringEncoder : String -> Bytes.Encode.Encoder
+                        stringEncoder text =
+                            Bytes.Encode.sequence
+                                [ Bytes.Encode.unsignedInt32 BE (Bytes.Encode.getStringWidth text)
+                                , Bytes.Encode.string text
+                                ]
+
                         encodedRule : String
                         encodedRule =
                             encodeRule encodeCell newRule
                                 |> Json.Encode.encode 0
-                                |> Base64.encode
+                                |> stringEncoder
+                                |> Bytes.Encode.encode
+                                |> Flate.deflateGZip
+                                |> Base64.fromBytes
+                                |> Maybe.withDefault ""
 
                         newUrl : String
                         newUrl =
@@ -397,10 +433,11 @@ viewControls : Model -> Element Msg
 viewControls model =
     E.row
         [ E.centerX
+        , E.alignTop
         , E.padding 10
-        , E.spacingXY 20 0
+        , E.spacingXY 50 0
         ]
-        [ viewPlayControls model.state
+        [ viewPlayControls model.settings.speed model.state
         , viewRuleControls (getType model.rule)
         , viewCellSizeControls model.settings.cellSize
         , viewEditingControls model.settings.editing
@@ -409,11 +446,21 @@ viewControls model =
 
 viewRuleControls : RuleType -> Element Msg
 viewRuleControls ruleType =
+    let
+        ruleTypeString : String
+        ruleTypeString =
+            case ruleType of
+                Simple -> "simple"
+                Extended -> "extended"
+                Generalized -> "generalized"
+    in
     Input.radioRow
-        []
+        [ E.height E.fill
+        , E.spacingXY 20 0
+        ]
         { onChange = UpdateRule << UpdateType
         , selected = Just ruleType
-        , label = viewControlLabel "Rule Type"
+        , label = viewControlLabel ("Rule Type: " ++ ruleTypeString)
         , options =
             [ Simple, Extended, Generalized ] |> List.map viewRuleTypeOption
         }
@@ -421,24 +468,11 @@ viewRuleControls ruleType =
 
 viewRuleTypeOption : RuleType -> Input.Option RuleType msg
 viewRuleTypeOption ruleType =
-    let
-        description : String
-        description =
-            case ruleType of
-                Simple ->
-                    "Simple"
-
-                Extended ->
-                    "Extended"
-
-                Generalized ->
-                    "Generalized"
-    in
-    Input.option ruleType (E.text description)
+    Input.optionWith ruleType <| drawExample ruleType
 
 
-viewPlayControls : State -> Element Msg
-viewPlayControls state =
+viewPlayControls : Int -> State -> Element Msg
+viewPlayControls playbackSpeed state =
     let
         s : { action : Msg, icon : Icon msg }
         s =
@@ -452,11 +486,36 @@ viewPlayControls state =
                     { action = UpdateState (UpdateSimulation Paused)
                     , icon = Filled.pause
                     }
+
+        infoString : String
+        infoString =
+            case state.simulation of
+                Paused -> "Paused"
+                Running -> "Running x" ++ (String.fromInt playbackSpeed)
     in
-    Input.button []
-        { onPress = Just s.action
-        , label = E.html <| s.icon 32 Inherit
-        }
+    E.row
+        [ E.alignBottom
+        , E.onLeft <|
+            E.el
+                [ E.centerX
+                , E.paddingXY 10 10
+                , Font.size 12
+                ] <|
+                    E.text infoString
+        ]
+        [ Input.button []
+            { onPress = Just (UpdateSettings DecreaseSpeed)
+            , label = E.html <| Filled.fast_rewind 32 Inherit
+            }
+        , Input.button []
+            { onPress = Just s.action
+            , label = E.html <| s.icon 32 Inherit
+            }
+        , Input.button []
+            { onPress = Just (UpdateSettings IncreaseSpeed)
+            , label = E.html <| Filled.fast_forward 32 Inherit
+            }
+        ]
 
 
 viewCellSizeControls : Int -> Element Msg
@@ -567,6 +626,7 @@ viewControlLabel : String -> Input.Label msg
 viewControlLabel content =
     Input.labelAbove
         [ E.centerY
+        , E.paddingXY 0 10
         , Font.size 12
         ] <|
             E.row
@@ -600,7 +660,7 @@ viewCases editing rule =
         ]
         ( getCases rule
             |> List.sortBy caseToInt
-            |> List.map (drawCase editing span ruleType)
+            |> List.map (drawInteractiveCase editing span ruleType)
             |> List.map (E.el [ E.centerX ])
             |> List.reverse
         )
@@ -689,8 +749,8 @@ highlightMobility ruleType ruleCase highlightedOption index =
         Nothing -> False
 
 
-drawCase : Editing -> Fragment.Span -> RuleType -> Case Cell -> Element Msg
-drawCase editing span ruleType ruleCase =
+drawInteractiveCase : Editing -> Fragment.Span -> RuleType -> Case Cell -> Element Msg
+drawInteractiveCase editing span ruleType ruleCase =
     let
         -- SVG viewbox
         drawDimensions : Offset
@@ -734,18 +794,74 @@ drawCase editing span ruleType ruleCase =
             ]
 
 
-drawCombination : Offset -> Combination Cell -> Svg Msg
+drawExample : RuleType -> Input.OptionState -> Element msg
+drawExample ruleType optionState =
+    let
+        -- SVG viewbox
+        drawDimensions : Offset
+        drawDimensions =
+            addOffset (Offset 2 2) (getCellOffset 3 2)
+
+        symbol : Cell
+        symbol =
+            if optionState == Input.Selected then
+                Live
+            else
+                Dead
+
+        progenySpan : Fragment.Span
+        progenySpan =
+            case ruleType of
+                Simple -> 0
+                Extended -> 1
+                Generalized -> 0
+
+        mobility : Mobility
+        mobility  =
+            case ruleType of
+                Simple -> Set.singleton 1
+                Extended -> Set.singleton 0
+                Generalized -> Set.fromList [-1, 0, 1]
+    in
+    E.html <|
+        TypedSvg.svg
+            [ width  <| px <| drawDimensions.y
+            , height <| px <| drawDimensions.x
+            , viewBox -1 -1 drawDimensions.y drawDimensions.x
+            ]
+            [ drawCombination (getCellOffset 0 0) <|
+                Fragment.newFragment symbol 1
+            , drawProgeny (getCellOffset 1 1) Nothing <|
+                Fragment.newFragment symbol progenySpan
+            , drawStates 1 Nothing <|
+                mobility
+            ]
+
+
+drawCombination : Offset -> Combination Cell -> Svg msg
 drawCombination offset combination =
-    combination
-        |> Fragment.toIndexedList
-        |> List.indexedMap
-            ( \i (index, cell) ->
-                drawCell (addOffset offset (getCellOffset 0 i)) cell False
-            )
-        |> TypedSvg.g []
+    let
+        combinationGroup : Svg msg
+        combinationGroup =
+            combination
+                |> Fragment.toIndexedList
+                |> List.indexedMap
+                    ( \i (index, cell) ->
+                        drawCell (addOffset offset (getCellOffset 0 i)) cell False
+                    )
+                |> TypedSvg.g []
+
+        middleState : Svg msg
+        middleState =
+            drawState (addOffset offset (getCellOffset 0 1)) True False
+    in
+    TypedSvg.g []
+        [ combinationGroup
+        , middleState
+        ]
 
 
-drawProgeny : Offset -> Maybe (Int -> Bool) -> Progeny Cell -> Svg Msg
+drawProgeny : Offset -> Maybe (Int -> Bool) -> Progeny Cell -> Svg msg
 drawProgeny offset highlighterOption progeny =
     progeny
         |> Fragment.toIndexedList
@@ -831,7 +947,7 @@ drawEventCells cellEvents span ruleCase =
         |> TypedSvg.g []
 
 
-drawCell : Offset -> Cell -> Bool -> Svg Msg
+drawCell : Offset -> Cell -> Bool -> Svg msg
 drawCell offset cell isHighlighted =
     let
         attributes : List (Attribute msg)
@@ -883,7 +999,7 @@ drawEventCell offset cellEvents =
         []
 
 
-drawStates : Fragment.Span -> Maybe (Int -> Bool) -> Mobility -> Svg Msg
+drawStates : Fragment.Span -> Maybe (Int -> Bool) -> Mobility -> Svg msg
 drawStates span highlighterOption mobility =
     let
         offset : Offset
@@ -905,10 +1021,10 @@ stateDrawSize : Int
 stateDrawSize = (cellDrawSize // 2) - 2
 
 
-drawState : Offset -> Bool -> Bool -> Svg Msg
+drawState : Offset -> Bool -> Bool -> Svg msg
 drawState offset isActive isHighlighted =
     let
-        attributes : List (Attribute Msg)
+        attributes : List (Attribute msg)
         attributes =
             [ cx <| px (offset.x + (toFloat cellDrawSize) / 2)
             , cy <| px (offset.y + (toFloat cellDrawSize) / 2)
@@ -939,6 +1055,7 @@ viewTape model =
             [ mapCustomAttribute (Rule model.rule)
             , mapCustomAttribute (Status model.state.simulation)
             , mapCustomAttribute (CellSize model.settings.cellSize)
+            , mapCustomAttribute (SimulationSpeed model.settings.speed)
             ]
 
         attributes : List(Html.Attribute msg)
@@ -982,6 +1099,7 @@ type AutomataAttribute
     | CellSize Int
     | CanvasWidth Float
     | CanvasHeight Float
+    | SimulationSpeed Int
 
 
 mapCustomAttribute : AutomataAttribute -> Html.Attribute a
@@ -1011,6 +1129,9 @@ mapCustomAttribute attribute =
 
                 CanvasHeight height ->
                     { field = "canvas-height", value = String.fromInt <| floor height }
+
+                SimulationSpeed speed ->
+                    { field = "simulation-speed", value = String.fromInt speed }
     in
     Html.Attributes.attribute fields.field fields.value
 

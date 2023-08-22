@@ -178,9 +178,9 @@ fromListTests =
                     |> Expect.equal (Ok [Live])
         , test "with sides" <|
             \_ ->
-                fromList [Live, Live, Live]
+                fromList [Dead , Live, Dead]
                     |> Result.andThen (\l -> Ok (Fragment.toList l))
-                    |> Expect.equal (Ok [Live, Live, Live])
+                    |> Expect.equal (Ok [Dead , Live, Dead])
         , test "even" <|
             \_ ->
                 fromList [Live, Live]

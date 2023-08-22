@@ -147,7 +147,7 @@ fromList cells =
 
                         middleOption : Maybe a
                         middleOption =
-                            List.drop 2 cells |> List.head
+                            List.drop span cells |> List.head
 
                         right : Array a
                         right = Array.fromList <| List.drop (span + 1) cells

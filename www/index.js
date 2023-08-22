@@ -48,7 +48,6 @@ const parseRule = (configuration) => {
       let mobility = ruleCase.outcome.mobility;
 
       let outcome = Outcome.new(progeny, mobility);
-      console.log(`${combination}: progeny = ${progeny}, mobility = ${mobility}`);
       rule.set_outcome(combination, outcome);
     });
 
@@ -111,11 +110,11 @@ customElements.define('mobile-automata',
 
       this.canvas = this.querySelector('#ma-canvas');
 
+      this.simulationSpeed = 1;
       this.cellSize = 10;
       let { span, depth } = getTapeDimensions(this.canvas.width, this.canvas.height, this.cellSize);
       this.depth = depth;
 
-      console.log(`constructor width: ${this.canvas.width}`);
       this.ca = new MobileAutomata(span, null, 1);
 
       this.animationId = null;
@@ -169,15 +168,17 @@ customElements.define('mobile-automata',
           break;
 
         case 'canvas-width':
-          console.log(`Changing canvas width: ${newValue}`);
           this.canvas.width = parseInt(newValue);
           this.resize();
           break;
 
         case 'canvas-height':
-          console.log('Changing canvas height');
           this.canvas.height = parseInt(newValue) - 4;
           this.resize();
+          break;
+
+        case 'simulation-speed':
+          this.simulationSpeed = parseInt(newValue);
           break;
       }
     }
@@ -195,7 +196,7 @@ customElements.define('mobile-automata',
     }
 
     static get observedAttributes() {
-      return ['rule', 'cell-size', 'state', 'canvas-width', 'canvas-height'];
+      return ['rule', 'cell-size', 'state', 'canvas-width', 'canvas-height', 'simulation-speed'];
     }
 
     play() {
@@ -207,8 +208,10 @@ customElements.define('mobile-automata',
     }
 
     renderLoop() {
-      this.ca.tick();
-      drawIteration(this.canvas.getContext('2d'), this.cellSize, this.depth, this.ca);
+      for (let i = 0; i < this.simulationSpeed; i++) {
+        this.ca.tick();
+        drawIteration(this.canvas.getContext('2d'), this.cellSize, this.depth, this.ca);
+      }
 
       this.animationId = requestAnimationFrame(this.renderLoop.bind(this));
     }

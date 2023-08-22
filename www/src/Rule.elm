@@ -9,7 +9,6 @@ module Rule exposing
     , getCombination, getProgeny, getMobility
     )
 
-import Debug
 import Json.Decode
 import Json.Decode.Extra
 import Json.Decode.Pipeline exposing (required, resolve)
@@ -320,14 +319,11 @@ encodeOutcome valueEncoder { progeny, mobility } =
 
 fragmentDecoder : List a -> Json.Decode.Decoder (Fragment a)
 fragmentDecoder cells =
-    let
-        test = Debug.log "fragment" cells
-    in
     case Fragment.fromList cells of
         Ok fragment ->
             Json.Decode.succeed fragment
 
-        Err _ ->
+        Err error ->
             Json.Decode.fail ("Improper fragment: " ++ (String.fromInt (List.length cells)))
 
 
