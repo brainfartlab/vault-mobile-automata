@@ -175,7 +175,8 @@ init _ url key =
 
         config : Config
         config =
-            parse (query parseConfig) url
+            { url | path = "" }
+                |> parse (query parseConfig)
                 |> Maybe.withDefault
                     { rule = Ok defaultRule
                     }
