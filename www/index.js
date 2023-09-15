@@ -29,15 +29,7 @@ const combinationToIndex = (c) => {
   return c.reduce((acc, value) => 2*acc + value, 0);
 };
 
-const getTapeDimensions = (width, height, cellSize) => {
-  let span = Math.floor((width - 1) / (cellSize + 1));
-  let depth = Math.floor((height - 1) / (cellSize + 1));
-
-  return { span, depth };
-};
-
 const parseRule = (configuration) => {
-
   if (configuration !== null) {
     let ruleConfig = JSON.parse(configuration);
     let rule = MobileRule.new(ruleConfig.span);
@@ -60,12 +52,13 @@ const parseRule = (configuration) => {
 }
 
 class MobileAutomata {
-  constructor(span, rule, windowSpan) {
+  constructor(span, depth, rule, windowSpan) {
     this.universe = Universe.new(span);
     this.rule = rule;
     this.state = MobileState.new(span);
 
     this.iteration = 0;
+    this.depth = depth;
   }
 
   setRule(configuration, windowSpan) {
@@ -103,19 +96,87 @@ class MobileAutomata {
   }
 }
 
+class Tape {
+  constructor(canvas, gridCanvas, cellSize) {
+    this.canvas = canvas;
+    this.grid = gridCanvas;
+
+    this.cellSize = cellSize;
+    this.buffer = null;
+  }
+
+  get width() {
+    return this.canvas.width;
+  }
+
+  set width(newWidth) {
+    this.canvas.width = newWidth;
+    this.grid.width = newWidth;
+
+    this.clearBuffer();
+  }
+
+  get height() {
+    return this.canvas.height;
+  }
+
+  set height(newHeight) {
+    this.canvas.height = newHeight;
+    this.grid.height = newHeight;
+
+    this.clearBuffer();
+  }
+
+  get span() {
+    return Math.floor((this.width - 1) / (this.cellSize + 1));
+  }
+
+  get depth() {
+    return Math.floor((this.height - 1) / (this.cellSize + 1));
+  }
+
+  clearBuffer() {
+    this.buffer = null;
+  }
+
+  clear() {
+    this.canvas.getContext('2d').clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  get context() {
+    return this.canvas.getContext('2d');
+  }
+
+  clearGrid() {
+    this.grid.getContext('2d').clearRect(0, 0, this.grid.width, this.grid.height);
+  }
+
+  get gridContext() {
+    return this.grid.getContext('2d');
+  }
+
+  save(offset) {
+    this.buffer = this.context.getImageData(0, offset, this.width, this.height);
+  }
+
+  restore() {
+    if (this.buffer !== null) {
+      this.context.putImageData(this.buffer, 0, 0);
+    }
+  }
+}
+
 customElements.define('mobile-automata',
   class extends HTMLElement {
     constructor() {
       super();
 
-      this.canvas = this.querySelector('#ma-canvas');
-
       this.simulationSpeed = 1;
-      this.cellSize = 10;
-      let { span, depth } = getTapeDimensions(this.canvas.width, this.canvas.height, this.cellSize);
-      this.depth = depth;
+      let canvas = this.querySelector('#ma-canvas');
+      let gridCanvas = document.createElement("canvas");
 
-      this.ca = new MobileAutomata(span, null, 1);
+      this.tape = new Tape(canvas, gridCanvas, 10);
+      this.ca = new MobileAutomata(this.tape.span, this.tape.depth, null, 1);
 
       this.animationId = null;
     }
@@ -125,10 +186,7 @@ customElements.define('mobile-automata',
     }
 
     resize() {
-      let { span, depth } = getTapeDimensions(this.canvas.width, this.canvas.height, this.cellSize);
-      this.depth = depth;
-
-      this.ca = new MobileAutomata(span, this.ca.rule, 1);
+      this.ca = new MobileAutomata(this.tape.span, this.tape.depth, this.ca.rule, 1);
       this.reset();
     }
 
@@ -137,13 +195,12 @@ customElements.define('mobile-automata',
       this.ca.clearStates();
 
       let middle = Math.floor(this.ca.universe.span() / 2);
-      // this.ca.setCell(middle, true);
       this.ca.setState(middle);
 
-      this.canvas.getContext('2d').clearRect(0, 0, this.canvas.width, this.canvas.height);
+      this.tape.clearBuffer();
 
-      drawGrid(this.canvas.getContext('2d'), this.cellSize, this.ca.universe.span(), this.depth);
-      drawIteration(this.canvas.getContext('2d'), this.cellSize, this.depth, this.ca);
+      drawGrid(this.tape);
+      drawIteration(this.tape, this.ca);
     }
 
     attributeChangedCallback(name, oldValue, newValue) {
@@ -154,11 +211,9 @@ customElements.define('mobile-automata',
           break;
 
         case 'cell-size':
-          this.cellSize = parseInt(newValue);
-
-          let { span, depth } = getTapeDimensions(this.canvas.width, this.canvas.height, this.cellSize);
-          this.depth = depth;
-          this.ca.wipe(span);
+          let cellSize = parseInt(newValue);
+          this.tape.cellSize = cellSize;
+          this.ca.wipe(this.tape.span);
 
           this.reset();
           break;
@@ -168,12 +223,12 @@ customElements.define('mobile-automata',
           break;
 
         case 'canvas-width':
-          this.canvas.width = parseInt(newValue);
+          this.tape.width = parseInt(newValue);
           this.resize();
           break;
 
         case 'canvas-height':
-          this.canvas.height = parseInt(newValue) - 4;
+          this.tape.height = parseInt(newValue) - 4;
           this.resize();
           break;
 
@@ -210,7 +265,8 @@ customElements.define('mobile-automata',
     renderLoop() {
       for (let i = 0; i < this.simulationSpeed; i++) {
         this.ca.tick();
-        drawIteration(this.canvas.getContext('2d'), this.cellSize, this.depth, this.ca);
+
+        drawIteration(this.tape, this.ca);
       }
 
       this.animationId = requestAnimationFrame(this.renderLoop.bind(this));
@@ -218,38 +274,47 @@ customElements.define('mobile-automata',
   }
 );
 
-function drawGrid(ctx, cellSize, span, depth) {
+function drawGrid(tape) {
+  tape.clearGrid();
+  let ctx = tape.gridContext;
+
   ctx.beginPath();
   ctx.strokeStyle = COLOR_GRID;
-  ctx.strokeWidth  =1;
+  ctx.strokeWidth = 1;
 
   // vertical lines
-  for (let i = 0; i <= span; i++) {
-    let x = i * (cellSize + 1) + 1;
+  for (let i = 0; i <= tape.span; i++) {
+    let x = i * (tape.cellSize + 1) + 1;
 
     ctx.moveTo(x, 0);
-    ctx.lineTo(x, depth * (cellSize + 1));
+    ctx.lineTo(x, tape.depth * (tape.cellSize + 1));
   }
 
   // horizontal lines
-  for (let i = 0; i <= depth; i++) {
-    let y = i * (cellSize + 1) + 1;
+  for (let i = 0; i <= tape.depth; i++) {
+    let y = i * (tape.cellSize + 1) + 1;
 
     ctx.moveTo(0, y);
-    ctx.lineTo(span * (cellSize + 1), y);
+    ctx.lineTo(tape.span * (tape.cellSize + 1), y);
   }
 
   ctx.stroke();
 }
 
-function drawIteration(ctx, cellSize, depth, ca) {
+function drawIteration(tape, ca) {
+  tape.clear();
+
+  tape.restore();
+
   const cellsPtr = ca.universe.as_ptr();
   const cells = new Uint8Array(memory.buffer, cellsPtr, Math.ceil(ca.universe.span() / 8));
-
+  let ctx = tape.context;
   ctx.beginPath();
 
-  let layer = ca.iteration % depth;
-  let yOffset = layer * (cellSize + 1) + 1;
+  let layer = ca.iteration >= tape.depth
+    ? tape.depth - 1
+    : ca.iteration;
+  let yOffset = layer * (tape.cellSize + 1) + 1;
 
   for (let c = 0; c <= ca.universe.span(); c++) {
     ctx.fillStyle = isBitSet(c, cells)
@@ -257,25 +322,36 @@ function drawIteration(ctx, cellSize, depth, ca) {
       : COLOR_DEAD;
 
     ctx.fillRect(
-      c * (cellSize + 1) + 1,
-      yOffset,
-      cellSize,
-      cellSize,
+      c * (tape.cellSize + 1) + 1,
+      yOffset * (tape.cellSize + 1) + 1,
+      tape.cellSize,
+      tape.cellSize,
     );
-  }
+  };
 
   ctx.fillStyle = COLOR_STATE;
   let positions = ca.state.get_positions();
-  positions.forEach((position) => {
+  positions.forEach((p) => {
+    ctx.moveTo(
+      p * (tape.cellSize + 1) + 1,
+      yOffset,
+    );
     ctx.arc(
-      position * (cellSize + 1) + 1 + (cellSize / 2),
-      yOffset + (cellSize / 2),
-      cellSize / 4,
+      p * (tape.cellSize + 1) + 1 + (tape.cellSize / 2),
+      yOffset + (tape.cellSize / 2),
+      tape.cellSize / 4,
       0,
       2 * Math.PI,
     );
   });
 
-  // ctx.stroke();
   ctx.fill();
+
+  let offset = ca.iteration > tape.depth
+    ? tape.cellSize + 1
+    : 0;
+  tape.save(offset);
+
+  // draw grid
+  tape.context.drawImage(tape.grid, 0, 0);
 }
